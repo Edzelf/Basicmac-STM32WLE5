@@ -607,6 +607,20 @@ void     LMIC_getRxdErrInfo (s4_t* skew, u4_t* span);
 #define TRACE_ADDR(a)
 #endif
 
+// Definitions for DR_RANGE_MAP
+enum _dr_eu868_t {
+        EU868_DR_SF12 = 0,
+        EU868_DR_SF11,
+        EU868_DR_SF10,
+        EU868_DR_SF9,
+        EU868_DR_SF8,
+        EU868_DR_SF7,
+        EU868_DR_SF7B,
+        EU868_DR_FSK,
+        EU868_DR_NONE
+};
+
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
