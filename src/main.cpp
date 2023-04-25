@@ -25,16 +25,14 @@
 #include <lmic.h>
 #include <STM32RTC.h>
 #include <STM32LowPower.h>
+#include <EEPROM.h>                                       // Access to simulated EEPROM in Flash
+#include <SPI.h>                                          // Needed for correct compilation
 
 //***************************************************************************************************
 // Configuration of end device.
 #include "LoRa_Device_01.h"            // Definition for end device (Freq band, keys, ...)
 //***************************************************************************************************
 
-#include <EEPROM.h>                                       // Access to simulated EEPROM in Flash
-#include <SPI.h>                                          // Needed fro correct compilation
-
-//#include <STM32LowPower.h>
 
 // Pin definitions.  The marking of the pins is strange.  Both the internal name and the marking
 // on the module is listed in the following definition(s).
@@ -47,6 +45,8 @@
 #define BKP_R_XMITCNT    RTC_BKP_DR12                     // Count number of transmits for rejoin
 
 #define REJOIN_LIMIT     300                              // Rejoin after this number of transmits
+
+#define DEBUG_BUFFER_SIZE 150                             // Max line length for debugging
 
 // Data kept in EEPROM
 struct eepromdata_t
@@ -68,6 +68,43 @@ eepromdata_t      eepromdata ;                            // Data to and from EE
 STM32RTC&         rtc = STM32RTC::getInstance() ;         // Object for RTC clock (and RTC data)
 bool              tx_finished = false ;                   // True if send finished
 int32_t           xmitcount ;                             // Transmitcount from BKP register
+bool              DEBUG = true ;                          // Allow debug using dbgprint()
+#ifndef evnames                                           // Depends on lmic CFG_DEBUG
+  const char* evnames[] =
+        {
+          "??", "SCAN_TIMEOUT", "BEACON_FOUND", "BEACON_MISSED", "BEACON_TRACKED",
+          "JOINING", "JOINED", "RFU1", "JOIN_FAILED", "REJOIN_FAILED",
+          "TXCOMPLETE (includes waiting for RX windows)",
+          "LOST_TSYNC", "RESET", "RXCOMPLETE", "LINK_DEAD", "LINK_ALIVE",
+          "SCAN_FOUND", "TXSTART", "TXDONE", "DATARATE", "START_SCAN", "ADR_BACKOFF"
+        } ;
+#endif
+
+// Forward declarations:
+char* get_rtc_time() ;                                    // Get current time
+
+
+//**************************************************************************************************
+//                                          D B G P R I N T                                        *
+//**************************************************************************************************
+// Send a line of info to serial output.  Works like vsprintf(), but checks the DEBUG flag.        *
+// Print only if DEBUG flag is true.                                                               *
+//**************************************************************************************************
+void dbgprint ( const char* format, ... )
+{
+  static char sbuf[DEBUG_BUFFER_SIZE] ;                // For debug lines
+  va_list varArgs ;                                    // For variable number of params
+
+  va_start ( varArgs, format ) ;                       // Prepare parameters
+  vsnprintf ( sbuf, sizeof(sbuf), format, varArgs ) ;  // Format the message
+  va_end ( varArgs ) ;                                 // End of using parameters
+  if ( DEBUG )                                         // DEBUG on?
+  {
+    Serial.printf ( "%s - ",                           // Yes, print prefix (time of day)
+                    get_rtc_time() + 9 ) ;             // Without 9 character date
+    Serial.println ( sbuf ) ;                          // and the info
+  }
+}
 
 
 //***************************************************************************************************
@@ -156,7 +193,7 @@ void saveOTAAkeys()
   memcpy ( eepromdata.appSKey, LMIC.lceCtx.appSKey, 16 ) ;  // Save appSKey
   eepromdata.joinedFlag = true ;                            // Join data is valid now
   saveEEPROMdata() ;                                        // Save in EEPROM
-  debug_printf ( "OTAA join keys saved in EEPROM\n" ) ;
+  dbgprint ( "OTAA join keys saved in EEPROM" ) ;
 }
 
 
@@ -175,9 +212,9 @@ void showOTAAkeys()
     sprintf ( buf1 + j * 3, "%02X ", eepromdata.nwkSKey[j] ) ;
     sprintf ( buf2 + j * 3, "%02X ", eepromdata.appSKey[j] ) ;
   }
-  debug_printf ( "LoRa devaddr is %08X\n", eepromdata.devaddr  ) ;
-  debug_printf ( "LoRa nwkSKey is %s\n",  buf1 ) ;
-  debug_printf ( "LoRa appSKey is %s\n",  buf2 ) ;
+  dbgprint ( "LoRa devaddr is %08X", eepromdata.devaddr  ) ;
+  dbgprint ( "LoRa nwkSKey is %s",  buf1 ) ;
+  dbgprint ( "LoRa appSKey is %s",  buf2 ) ;
 }
 
 
@@ -188,40 +225,27 @@ void showOTAAkeys()
 //***************************************************************************************************
 void onLmicEvent (ev_t ev)
 {
-    debug_printf ( "Event EV_%e\n", ev ) ;
+    dbgprint ( "Event %s", evnames[ev] ) ;                            // Show name of event
     switch(ev)
     {
         case EV_JOINED:
-            LMIC_setLinkCheckMode(0);
+            LMIC_setLinkCheckMode(0) ;
             break;
         case EV_TXDONE:
-            //debug_printf ( "EV_TXDONE\n" ) ;
-            //extern char dbgtext[] ;
-            //Serial.print ( dbgtext ) ;
             break ;
         case EV_TXCOMPLETE:
             eepromdata.fcnt = LMIC.seqnoUp ;                          // Get uplink frame counter
             setBackupRegister ( BKP_R_FCNT,                           // Save reset count plus one
                                 eepromdata.fcnt ) ;
-            debug_printf ( "EV_TXCOMPLETE (includes waiting for RX windows)\n" ) ;
             tx_finished = true ;                                      // Signal finished to main loop
             if (LMIC.txrxFlags & TXRX_ACK)
             {
-              debug_printf ( "Received ack\n" ) ;
+              dbgprint ( "Received ack" ) ;
             }
             if ( LMIC.dataLen )
             {
-              debug_printf ( "Received %d bytes of payload\n",
-                              LMIC.dataLen ) ;
-              for ( int i = 0 ; i < LMIC.dataLen ; i++ )
-              {
-                if ( i )
-                {
-                  debug_printf ( ", " ) ;
-                }
-                debug_printf ( "0x%02X", LMIC.frame[LMIC.dataBeg + i] ) ;
-              }
-              debug_printf ( "\n" ) ;
+              dbgprint ( "Received %d bytes of payload",
+                         LMIC.dataLen ) ;
             }
             break;
          default:
@@ -242,19 +266,19 @@ void send_packet(osjob_t* j)
 
   if ( LMIC.opmode & OP_TXRXPEND )                          // Current TX/RX job running?
   {
-    debug_printf ( "OP_TXRXPEND, not sending" ) ;           // Yes, show error
+    dbgprint ( "OP_TXRXPEND, not sending" ) ;           // Yes, show error
     return ;                                                // And leave
   }
   digitalWrite ( LED, LOW ) ;                               // Show activity
   sprintf ( payload, "Test %d", eepromdata.fcnt ) ;         // Format test packet
-  debug_printf ( "Queue package '%s'\n", payload ) ;        // Show packet to send
+  dbgprint ( "Queue package '%s'", payload ) ;        // Show packet to send
   LMIC_setTxData2 ( 1, (u1_t*)payload,                      // Queue the packet
                     strlen ( payload ), 0 ) ;
   digitalWrite ( LED, HIGH ) ;                              // End of activity
   if ( ( eepromdata.fcnt % 100 ) == 0 )                     // 100 packets sent?
   {
     saveEEPROMdata() ;                                      // Yes, save frame counter in EEPROM
-    debug_printf ( "fcnt saved in EEPROM\n" ) ;
+    dbgprint ( "fcnt saved in EEPROM" ) ;
   }
 }
 
@@ -269,11 +293,11 @@ void setchannels()
 {
   if ( LoraBand == REGION_EU868 )
   {
-    debug_printf ( "LoRa configured for Europe 868 MHz\n" ) ;
+    dbgprint ( "LoRa configured for Europe 868 MHz" ) ;
   }
   if ( LoraBand == REGION_AU915 )
   {
-    debug_printf ( "LoRa configured Australia/New Zealand 916.8 to 918.2 MHz\n" ) ;
+    dbgprint ( "LoRa configured Australia/New Zealand 916.8 to 918.2 MHz" ) ;
     for ( int band = 0 ; band < 72 ; band++ )              // Disable/enable bands
     {
       if ( band < 8 || band > 15 )                         // Only leave bands 8..15
@@ -302,7 +326,7 @@ void retrieve_fcnt()
   readEEPROMdata() ;                                        // Read EEPROM data
   if ( eepromdata.datavalid != DATAVALID )                  // Valid data in EEPROM?
   {
-    debug_printf ( "Data in EEPROM is invalid\n" ) ;        // No, show it
+    dbgprint ( "Data in EEPROM is invalid" ) ;              // No, show it
     eepromdata.datavalid = DATAVALID ;                      // Initialize EEPROM
     eepromdata.fcnt = 0 ;                                   // Count is unknown
     eepromdata.joinedFlag = false ;                         // Assume not joined
@@ -310,8 +334,8 @@ void retrieve_fcnt()
   }
   else
   {
-    debug_printf ( "Data in EEPROM is valid, "              // fcnt from EEPROM 100, 200, ...
-                   "fcnt is %d\n", eepromdata.fcnt ) ;
+    dbgprint ( "Data in EEPROM is valid, "                  // fcnt from EEPROM 100, 200, ...
+                   "fcnt is %d", eepromdata.fcnt ) ;
     // The framecounter is saved in EEPROM only after every 100 packets in order to reduce wear-out.
     // So we make certain that the fcnt will be high enough.
     eepromdata.fcnt += 101 ;
@@ -320,8 +344,8 @@ void retrieve_fcnt()
   {
     bckVal = getBackupRegister ( BKP_R_FCNT ) ;             // Yes, read fcnt from RTC memory
     xmitcount = getBackupRegister ( BKP_R_XMITCNT ) ;       // and xmit count
-    debug_printf ( "Data in RTC is valid, "                 // And show
-                   "fcnt is %d\n", bckVal  ) ;
+    dbgprint ( "Data in RTC is valid, "                     // And show
+                   "fcnt is %d", bckVal  ) ;
     if ( bckVal > ( eepromdata.fcnt + 100 ) )               // Count in EEPROM lower than expected?
     {
       savflag = true ;                                      // Yes, set flag to update EEPROM
@@ -330,7 +354,7 @@ void retrieve_fcnt()
   }
   else
   {
-    debug_printf ( "Data in RTC is not valid\n" ) ;
+    dbgprint ( "Data in RTC is not valid" ) ;
     setBackupRegister ( BKP_R_DATAVALID, DATAVALID ) ;      // Invalid, write new data
     setBackupRegister ( BKP_R_FCNT, eepromdata.fcnt ) ;     // Insert uplink frame counter
     setBackupRegister ( BKP_R_XMITCNT, REJOIN_LIMIT ) ;     // Force rejoin
@@ -340,7 +364,7 @@ void retrieve_fcnt()
   {
     saveEEPROMdata() ;                                      // Yes, update EEPROM
   }
-  debug_printf ( "fcnt to be used for TTN is %d\n",         // Show final count
+  dbgprint ( "fcnt to be used for TTN is %d",               // Show final count
                  eepromdata.fcnt ) ;
 }
 
@@ -408,7 +432,7 @@ void setup()
     digitalToggle ( LED ) ;                                 // Turn LED on/off
     delay ( 100 ) ;                                         // Time to start serial monitor
   }
-  debug_printf ( "Started at %s...\n",                      // Show alive message
+  dbgprint ( "Started at %s...",                            // Show alive message
                  get_rtc_time() ) ;
   os_init ( NULL ) ;                                        // Initialize lmic
   LMIC_reset() ;                                            // Reset the MAC state
@@ -425,11 +449,11 @@ void setup()
       }
     }
   }
-  debug_printf ( "Start JOIN...\n" ) ;                      // For ABP this should be fast
+  dbgprint ( "Start JOIN..." ) ;                            // For ABP this should be fast
   digitalWrite ( LED, LOW ) ;                               // Signal activity
   if ( JoinMode == JOINMODE_OTAA )                          // OTAA method?
   {
-    debug_printf ( "xmitcount is %d\n", xmitcount ) ;
+    dbgprint ( "xmitcount is %d", xmitcount ) ;
     if ( ( xmitcount < REJOIN_LIMIT ) &&                    // Yes, already joined?
          ( eepromdata.joinedFlag == true ) )
     {
@@ -438,11 +462,11 @@ void setup()
       memcpy ( AppSKey, eepromdata.appSKey, 16 ) ;
       setBackupRegister ( BKP_R_XMITCNT, ++xmitcount ) ;    // Update xmitcount in BKP register
       JoinMode = JOINMODE_ABP ;                             // Force ABP-mode
-      debug_printf ( "OTAA join already made\n" ) ;         // Show for debug
+      dbgprint ( "OTAA join already made" ) ;               // Show for debug
     }
     else
     {
-      debug_printf ( "Join with OTAA\n" ) ;                 // (Re)Join
+      dbgprint ( "Join with OTAA" ) ;                       // (Re)Join
       xmitcount = 0 ;                                       // Reset xmit counter
       setBackupRegister ( BKP_R_XMITCNT, xmitcount ) ;      // Save in RTC memory
       eepromdata.joinedFlag = false ;                       // Set to not joined
@@ -455,7 +479,7 @@ void setup()
                       (const uint8_t*)NwkSKey,
                       (const uint8_t*)AppSKey ) ;
     LMIC.seqnoUp = eepromdata.fcnt ;                          // Set uplink frame counter
-    debug_printf ( "ABP Framecount set to %d\n",
+    dbgprint ( "ABP Framecount set to %d",
                    eepromdata.fcnt ) ;
     #if defined(CFG_eu868)
     // Set up the channels used by the Things Network, which corresponds
@@ -515,7 +539,7 @@ void loop()
       sleeptime = tx_interval_sec * 1000 ;                // Adjust to prevent a very long sleep
       sleeptime_sec = tx_interval_sec ;
     }
-    debug_printf ( "Start deep sleep at %s for %d sec\n", // Show go to sleep
+    dbgprint ( "Start deep sleep at %s for %d sec",       // Show go to sleep
                    get_rtc_time(), sleeptime_sec ) ;
     delay ( 50 ) ;                                        // Time to print last line
     LowPower.begin() ;                                    // Init low power mode
