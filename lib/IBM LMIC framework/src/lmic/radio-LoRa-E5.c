@@ -777,6 +777,9 @@ static void rxfsk (bool rxcontinuous) {
 
 static void rxlora (bool rxcontinuous) {
     // configure radio (needs rampup time)
+    // 30-june-2023, ES: SetLoRaSymbNumTimeout ( LMIC.rxsyms ) causes problems on some models.
+    // It generates a time-out on receive of Join accept.
+    // So I use a normal time-out instead.  See SetRx().
     ostime_t t0 = os_getTime();
     CommonSetup();
     SetStandby(STDBY_RC);
@@ -786,7 +789,10 @@ static void rxlora (bool rxcontinuous) {
     SetPacketParamsLora(LMIC.rps, 255, !LMIC.noRXIQinversion);
     SetSyncWordLora(0x3444);
     StopTimerOnPreamble(0);
-    SetLoRaSymbNumTimeout(LMIC.rxsyms);
+    //debug_printf ( "rxlora SymbNumTimeout set to %d\n",
+    //               LMIC.rxsyms ) ;
+    //SetLoRaSymbNumTimeout(LMIC.rxsyms);
+    SetLoRaSymbNumTimeout(0); // ES: Use normal time-out
     SetDioIrqParams(IRQ_RXDONE | IRQ_TIMEOUT);
     ClearIrqStatus(IRQ_ALL);
     // enter frequency synthesis mode (become ready for immediate rx)
@@ -803,29 +809,26 @@ static void rxlora (bool rxcontinuous) {
     }
     // now receive (lock interrupts only for final fine tuned rx timing...)
     hal_disableIRQs();
-    if (rxcontinuous) { // continous rx
-        BACKTRACE();
-        // enable antenna switch for RX (and account power consumption)
-        hal_ant_switch(HAL_ANTSW_RX);
+    BACKTRACE();
+    // enable antenna switch for RX (and account power consumption)
+    hal_ant_switch(HAL_ANTSW_RX);
+    if (rxcontinuous) {     // continous rx
         // rx infinitely (no timeout, until rxdone, will be restarted)
         SetRx(0);
     } else { // single rx
-        BACKTRACE();
-        hal_ant_switch(HAL_ANTSW_RX);
         // busy wait until exact rx time
         hal_waitUntil(LMIC.rxtime);
-        // enable antenna switch for RX (and account power consumption)
-        hal_ant_switch(HAL_ANTSW_RX);
         // rx for max LMIC.rxsyms symbols
-        SetRx(0); // (infinite, timeout set via SetLoRaSymbNumTimeout)
+        // SetRx(0);        // (infinite, timeout set via SetLoRaSymbNumTimeout)
+        SetRx(500 << 6);    // Use normal timeout (half the receive window)
     }
     hal_enableIRQs();
-    debug_printf ( "rxlora t0 is %d, now is %d, rxtime is %d, delta is %d\n",
-                   t0, now, LMIC.rxtime, LMIC.rxtime - now ) ;
+    debug_printf ( "rxlora t0 is %t, now is %t, rxtime is %t, delta is %d msec\n",
+                   t0, now, LMIC.rxtime, osticks2ms ( LMIC.rxtime - now ) ) ;
 }
 
 void radio_cca () {
-    LMIC.rssi = -127; //XXX:TBD
+    LMIC.rssi = -127;       //XXX:TBD
 }
 
 void radio_cad (void) {
