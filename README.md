@@ -11,3 +11,6 @@ The lmic messages can be eliminated by commenting out the definitions of CFG_DEB
 There is also a definition of "DEBUG" in the demonstration main.cpp source, which can be set to false to stop application debug output.
 # Upload with ST-Link.
 In deep sleep mode, the upload of the program may cause some problems.  Press and hold the reset button and start the upload.  As soon as the LED on the ST-Link starts to flash, release the reset button.
+# Example PCB.
+I have made a print for this module.  It has a I2C bus to connect a sensor.  The power to the I2C bus is switched by a FET to reduce current during sleep to 4.5 microAmp.  The print looks like this:
+![image](https://github.com/Edzelf/Basicmac-STM32WLE5/assets/18257026/30304268-b8b1-4a99-b811-494230a3aa9c)
